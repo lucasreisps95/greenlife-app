@@ -1,1 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#047857">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>GreenLife Route Manager</title>
+<link rel="manifest" href='data:application/manifest+json,{"name":"GreenLife Route Manager","short_name":"GreenLife","display":"standalone","start_url":".","background_color":"%23f1f5f9","theme_color":"%23047857"}'>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  #nav { padding-bottom: env(safe-area-inset-bottom); }
+  #sheetbar { bottom: calc(3.5rem + env(safe-area-inset-bottom)); }
+</style>
+</head>
+<body class="bg-slate-100 font-sans">
 
+<div class="mx-auto max-w-md min-h-screen">
+  <header class="flex items-center justify-between bg-emerald-700 px-4 py-3 text-white">
+    <h1 class="text-lg font-bold">🥗 GreenLife Fit Foods</h1>
+    <label class="text-xs">Split
+      <select id="splitSel" onchange="setSplit(this.value)" class="ml-1 rounded bg-emerald-800 px-1 py-0.5 text-white">
+        <option value="50">50%</option>
+        <option value="60">60%</option>
+        <option value="70">70%</option>
+        <option value="80">80%</option>
+      </select>
+    </label>
+  </header>
+
+  <main id="main"></main>
+</div>
+
+<nav id="nav" class="fixed inset-x-0 bottom-0 z-10 border-t border-slate-200 bg-white">
+  <div class="mx-auto flex w-full max-w-md">
+    <button data-tab="dash" onclick="setTab('dash')">📊 Today</button>
+    <button data-tab="sheet" onclick="setTab('sheet')">📝 Sheet</button>
+    <button data-tab="menu" onclick="setTab('menu')">🍱 Menu</button>
+  </div>
+</nav>
+
+<script>
+/* ================= DATA (from the GreenLife spreadsheet) ================= */
+const DEFAULT_MENU = [
+  { id:"salad", name:"Salad", category:"Lunch", price:15, active:true },
+  { id:"wrap", name:"Wrap", category:"Lunch", price:15, active:true },
+  { id:"spring-roll", name:"Spring Roll", category:"Lunch", price:15, active:true },
+  { id:"hot-lunch", name:"Hot Lunch Entrée", category:"Lunch", price:16, active:true },
+  { id:"cali-roll", name:"California Roll", category:"Lunch", price:12, active:true },
+  { id:"avocado-roll", name:"Avocado Roll", category:"Lunch", price:12, active:true },
+  { id:"sandwich", name:"Sandwich", category:"Lunch", price:15, active:true },
+  { id:"hummus", name:"Hummus Platter", category:"Lunch", price:15, active:true },
+  { id:"chicken-protein", name:"Chicken Protein", category:"Lunch", price:15, active:true },
+  { id:"protein-platter", name:"Protein Platter", category:"Lunch", price:15, active:true },
+  { id:"blackened-chicken", name:"Blackened Chicken", category:"Lunch", price:15, active:true },
+  { id:"tuna-platter", name:"Tuna Protein Platter", category:"Lunch", price:16, active:true },
+  { id:"salmon-special", name:"Salmon Chef Special", category:"Lunch", price:17.5, active:true },
+  { id:"rainbow-roll", name:"Rainbow Roll", category:"Lunch", price:18, active:true },
+  { id:"cookies", name:"Cookies / Brownie", category:"Lunch", price:8, active:true },
+  { id:"burrito", name:"Burritos", category:"Breakfast", price:12, active:true },
+  { id:"croissant", name:"Breakfast Croissant", category:"Breakfast", price:11, active:true },
+  { id:"country-bfast", name:"Country Breakfast", category:"Breakfast", price:16, active:true },
+  { id:"parfait", name:"Fruit Parfait", category:"Breakfast", price:9.5, active:true },
+  { id:"fruit-salad", name:"Fruit Salad (Small)", category:"Breakfast", price:9, active:true },
+  { id:"mango-berry", name:"Mango & Berry", category:"Breakfast", price:9, active:true },
+  { id:"watermelon", name:"Watermelon", category:"Breakfast", price:7, active:true },
+  { id:"ham-cheese", name:"Ham & Cheese", category:"Breakfast", price:10, active:true },
+  { id:"oj", name:"OJ", category:"Drinks", price:8, active:true },
+  { id:"berry-juice", name:"Berry Juice", category:"Drinks", price:8, active:true },
+  { id:"green-juice", name:"Green Juice", category:"Drinks", price:8, active:true },
+  { id:"ranch", name:"Ranch", category:"Extras", price:2, active:true },
+  { id:"soup", name:"Soup", category:"Extras", price:10.5, active:true },
+  { id:"pasta-potato", name:"Pasta / Potato / Salsa", category:"Extras", price:9.5, active:true },
+  { id:"protein-guac", name:"Protein / Guacamole", category:"Extras", price:10.5, active:true }
+];
+const CATS = ["Breakfast","Lunch","Drinks","Extras"];
+
+/* ================= STORAGE ================= */
+function load(key, fallback){
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+  catch(e){ return fallback; }
+}
+function save(key, val){ try { localStorage.setItem(key, JSON.stringify(val)); } catch(e){} }
+
+let menu  = load("glf.menu", DEFAULT_MENU);
+let logs  = load("glf.logs", []);
+let split = load("glf.split", 70);
+let tab = "sheet";
+let counts = {};        // route sheet: itemId -> {taken, left}
+let square = "";        // card total typed in
+let draft = { name:"", price:"15", cat:"Lunch" };  // add-item form
+
+/* ================= HELPERS ================= */
+const money = n => "$" + (Number(n)||0).toFixed(2);
+const esc = s => String(s).replace(/&/g,"&").replace(/</g,"<");
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : "id-"+Date.now()+"-"+Math.random().toString(36).slice(2));
+function todayStr(){
+  const d = new Date();
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+function prettyDate(d){
+  return new Date(d+"T12:00:00").toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"});
+}
+const getE = id => counts[id] || { taken:0, left:0 };
+const stepBtn = (fn,label) =>
+  `<button type="button" onclick="${fn}" class="h-8 w-8 shrink-0 rounded-full bg-emerald-100 text-lg font-bold text-emerald-700 active:bg-emerald-200">${label}</button>`;
+
+/* ================= ACTIONS ================= */
+function setTab(t){ tab = t; render(); window.scrollTo(0,0); }
+function setSplit(v){ split = +v; save("glf.split", split); render(); }
+function setSquare(v){ square = v; }
+function setDraft(k,v){ draft[k] = v; }
+
+function bump(id, field, delta){
+  const e = getE(id);
+  let v = Math.max(0, (e[field]||0) + delta);
+  if(field === "left") v = Math.min(v, e.taken);
+  const next = { ...e, [field]: v };
+  if(field === "taken") next.left = Math.min(next.left, v);
+  counts[id] = next;
+  render();
+}
+function clearSheet(){
+  if(!confirm("Clear all numbers on this sheet?")) return;
+  counts = {}; square = ""; render();
+}
+function saveDay(){
+  const date = todayStr();
+  logs = logs.filter(l => l.date !== date);
+  logs.push({ date, route:"LUCAS", entries:counts, square:parseFloat(square)||0 });
+  save("glf.logs", logs);
+  counts = {}; square = "";
+  tab = "dash";
+  render(); window.scrollTo(0,0);
+}
+
+function bumpPrice(id, delta){
+  menu = menu.map(m => m.id===id ? { ...m, price: Math.max(0, +(m.price+delta).toFixed(2)) } : m);
+  save("glf.menu", menu); render();
+}
+function toggleItem(id){
+  menu = menu.map(m => m.id===id ? { ...m, active:!m.active } : m);
+  save("glf.menu", menu); render();
+}
+function removeItem(id){
+  if(!confirm("Delete this item from the menu?")) return;
+  menu = menu.filter(m => m.id!==id);
+  save("glf.menu", menu); render();
+}
+function addItem(){
+  if(!draft.name.trim()) return;
+  menu = [...menu, { id:uid(), name:draft.name.trim(), category:draft.cat, price:parseFloat(draft.price)||0, active:true }];
+  save("glf.menu", menu);
+  draft = { name:"", price:"15", cat:"Lunch" };
+  render();
+}
+
+/* ================= VIEWS ================= */
+function viewDash(){
+  const log = logs[logs.length-1];
+  if(!log) return `<p class="p-8 text-center text-slate-400">No days saved yet.<br><br>Go to the <b>📝 Sheet</b> tab, enter what was taken and what came back, then tap <b>Save Day</b>.</p>`;
+
+  const rows = menu.map(m => {
+    const e = log.entries[m.id] || { taken:0, left:0 };
+    const sold = Math.max(0, e.taken - e.left);
+    return { ...m, ...e, sold, revenue: sold * m.price };
+  });
+  const gross = rows.reduce((s,r)=>s+r.revenue,0);
+  const taken = rows.reduce((s,r)=>s+r.taken,0);
+  const sold  = rows.reduce((s,r)=>s+r.sold,0);
+  const sellThrough = taken ? Math.round(sold/taken*100) : 0;
+  const ownerCut = gross * split / 100;
+  const cashDue = ownerCut - (log.square||0);
+  const top = rows.filter(r=>r.sold>0).sort((a,b)=>b.revenue-a.revenue).slice(0,5);
+  const waste = rows.filter(r=>r.left>0).sort((a,b)=>b.left-a.left);
+
+  const stat = (label,value,sub) => `
+    <div class="rounded-2xl bg-white p-4 shadow-sm">
+      <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">${label}</p>
+      <p class="mt-1 text-2xl font-bold text-slate-800">${value}</p>
+      ${sub ? `<p class="text-xs text-slate-400">${sub}</p>` : ""}
+    </div>`;
+
+  return `
+  <div class="space-y-4 p-4 pb-28">
+    <div class="grid grid-cols-2 gap-3">
+      ${stat("Gross Sales", money(gross), prettyDate(log.date))}
+      ${stat("Sell-Through", sellThrough+"%", sold+" of "+taken+" items")}
+      ${stat("Owner "+split+"%", money(ownerCut), "Driver "+money(gross-ownerCut))}
+      ${stat("Cash Due", money(cashDue), "Card: "+money(log.square))}
+    </div>
+    <div class="rounded-2xl bg-white p-4 shadow-sm">
+      <h3 class="mb-2 font-bold text-slate-700">🏆 Top Sellers</h3>
+      ${top.length ? top.map(r=>`
+        <div class="flex justify-between border-b border-slate-100 py-1.5 text-sm last:border-0">
+          <span>${esc(r.name)} <span class="text-slate-400">×${r.sold}</span></span>
+          <span class="font-semibold">${money(r.revenue)}</span>
+        </div>`).join("") : `<p class="text-sm text-slate-400">No sales recorded.</p>`}
+    </div>
+    <div class="rounded-2xl ${waste.length ? "bg-amber-50" : "bg-emerald-50"} p-4 shadow-sm">
+      <h3 class="mb-2 font-bold ${waste.length ? "text-amber-700" : "text-emerald-700"}">
+        ${waste.length ? "⚠️ Came Back ("+waste.reduce((s,r)=>s+r.left,0)+" items)" : "🎉 Nothing came back!"}
+      </h3>
+      ${waste.map(r=>`
+        <div class="flex justify-between py-1 text-sm text-amber-800">
+          <span>${esc(r.name)}</span><span>${r.left} left</span>
+        </div>`).join("")}
+    </div>
+  </div>`;
+}
+
+function viewSheet(){
+  const active = menu.filter(m=>m.active);
+  const gross = active.reduce((s,m)=>{ const e=getE(m.id); return s + Math.max(0,e.taken-e.left)*m.price; },0);
+
+  const groups = CATS.map(cat => {
+    const items = active.filter(m=>m.category===cat);
+    if(!items.length) return "";
+    return `
+      <h3 class="mt-4 text-xs font-bold uppercase tracking-wide text-emerald-600">${cat}</h3>
+      ${items.map(m=>{
+        const e = getE(m.id);
+        const sold = Math.max(0, e.taken - e.left);
+        return `
+        <div class="mt-2 rounded-2xl bg-white p-3 shadow-sm">
+          <div class="flex items-center justify-between">
+            <p class="font-semibold text-slate-800">${esc(m.name)}</p>
+            <p class="text-xs text-slate-400">${money(m.price)} · sold ${sold} · ${money(sold*m.price)}</p>
+          </div>
+          <div class="mt-2 flex items-center justify-between text-sm">
+            <span class="w-9 text-slate-500">Took</span>
+            <div class="flex items-center gap-1">
+              ${stepBtn(`bump('${m.id}','taken',-1)`,"−")}
+              <span class="w-8 text-center font-semibold">${e.taken}</span>
+              ${stepBtn(`bump('${m.id}','taken',1)`,"+")}
+            </div>
+            <span class="w-9 text-right text-slate-500">Left</span>
+            <div class="flex items-center gap-1">
+              ${stepBtn(`bump('${m.id}','left',-1)`,"−")}
+              <span class="w-8 text-center font-semibold">${e.left}</span>
+              ${stepBtn(`bump('${m.id}','left',1)`,"+")}
+            </div>
+          </div>
+        </div>`;
+      }).join("")}`;
+  }).join("");
+
+  return `
+  <div class="p-4 pb-48">
+    <div class="flex justify-end">
+      <button onclick="clearSheet()" class="text-xs font-semibold text-slate-400 underline">Clear sheet</button>
+    </div>
+    ${groups || `<p class="p-6 text-center text-slate-400">No active items. Go to 🍱 Menu to add some.</p>`}
+  </div>
+  <div id="sheetbar" class="fixed inset-x-0 z-10 border-t border-slate-200 bg-white p-3">
+    <div class="mx-auto max-w-md">
+      <div class="mb-2 flex items-center justify-between text-sm">
+        <span class="text-slate-500">Square (card) total</span>
+        <input type="number" inputmode="decimal" step="0.01" placeholder="0.00" value="${square}"
+          oninput="setSquare(this.value)"
+          class="w-28 rounded-lg border border-slate-200 px-2 py-1 text-right">
+      </div>
+      <button onclick="saveDay()" class="w-full rounded-2xl bg-emerald-600 py-3 text-lg font-bold text-white active:bg-emerald-700">
+        Save Day · ${money(gross)}
+      </button>
+    </div>
+  </div>`;
+}
+
+function viewMenu(){
+  const priceStepper = m => `
+    <div class="flex items-center gap-1">
+      ${stepBtn(`bumpPrice('${m.id}',-0.5)`,"−")}
+      <span class="w-16 text-center text-sm font-semibold">${money(m.price)}</span>
+      ${stepBtn(`bumpPrice('${m.id}',0.5)`,"+")}
+    </div>`;
+
+  return `
+  <div class="p-4 pb-28">
+    <div class="rounded-2xl bg-white p-3 shadow-sm">
+      <h3 class="mb-2 font-bold text-slate-700">Add New Item</h3>
+      <div class="flex gap-2">
+        <input value="${esc(draft.name)}" oninput="setDraft('name',this.value)" placeholder="Item name"
+          class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm">
+        <input value="${esc(draft.price)}" oninput="setDraft('price',this.value)" type="number" inputmode="decimal"
+          class="w-16 rounded-lg border border-slate-200 px-2 py-1.5 text-sm">
+        <select onchange="setDraft('cat',this.value)" class="rounded-lg border border-slate-200 text-sm">
+          ${CATS.map(c=>`<option ${c===draft.cat?"selected":""}>${c}</option>`).join("")}
+        </select>
+        <button onclick="addItem()" class="rounded-lg bg-emerald-600 px-3 text-xl font-bold text-white">+</button>
+      </div>
+    </div>
+    ${CATS.map(cat=>{
+      const items = menu.filter(m=>m.category===cat);
+      if(!items.length) return "";
+      return `
+        <h3 class="mt-4 text-xs font-bold uppercase tracking-wide text-emerald-600">${cat}</h3>
+        ${items.map(m=>`
+        <div class="mt-2 flex items-center justify-between rounded-2xl bg-white p-3 shadow-sm ${m.active?"":"opacity-40"}">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" ${m.active?"checked":""} onchange="toggleItem('${m.id}')" class="h-5 w-5 accent-emerald-600">
+            <span class="font-semibold text-slate-800">${esc(m.name)}</span>
+          </div>
+          <div class="flex items-center gap-1">
+            ${priceStepper(m)}
+            <button onclick="removeItem('${m.id}')" class="px-1 text-slate-300">🗑</button>
+          </div>
+        </div>`).join("")}`;
+    }).join("")}
+  </div>`;
+}
+
+/* ================= RENDER ================= */
+function render(){
+  document.getElementById("main").innerHTML =
+    tab==="dash" ? viewDash() : tab==="sheet" ? viewSheet() : viewMenu();
+  document.querySelectorAll("#nav [data-tab]").forEach(b=>{
+    const on = b.dataset.tab===tab;
+    b.className = "flex h-14 flex-1 items-center justify-center text-sm font-semibold " + (on ? "text-emerald-700" : "text-slate-400");
+  });
+  document.getElementById("splitSel").value = String(split);
+}
+render();
+</script>
+</body>
+</html>
